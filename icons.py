@@ -1,0 +1,15 @@
+# -*- coding: utf-8 -*-
+
+CANCEL = '❌'
+CHECK = '✅'
+LEFT_ARROW = '⬅'
+UNDER_CONSTRUCTION = '🚧'
+BULLET = '🔹'
+SOCIO_ICON = '👤'
+TEMPO_ICON = '⏱'
+IN_ICON = '⤵'
+OUT_ICON = '⤴'
+CHIUDI_INSERZIONE_ICON = '❌'
+CAMBIA_SCADENZA_ICON = '🗓'
+SEND_MESSAGE_ICON = '📨'
+EXCLAMATION_ICON = '❗'
