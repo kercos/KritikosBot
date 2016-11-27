@@ -36,7 +36,8 @@ WORK_IN_PROGRESS = False
 
 STATES = {
     1:   'Start State',
-    2:   'Inside Game'
+    2:   'Game: choose own card',
+    3:   'Game: guess a card',
 }
 
 
@@ -85,7 +86,7 @@ def tellMaster(msg, markdown=False, one_time_keyboard=False):
     for id in key.MASTER_CHAT_ID:
         tell(id, msg, markdown=markdown, one_time_keyboard = one_time_keyboard, sleepDelay=True)
 
-def tell(chat_id, msg, kb=None, markdown=True, inline_keyboard=False, one_time_keyboard=False,
+def tell(chat_id, msg, kb=None, markdown=False, inline_keyboard=False, one_time_keyboard=False,
          sleepDelay=False, hide_keyboard=False, force_reply=False):
 
     # reply_markup: InlineKeyboardMarkup or ReplyKeyboardMarkup or ReplyKeyboardHide or ForceReply
@@ -267,7 +268,6 @@ def restart(p, msg=None):
 def redirectToState(p, new_state, **kwargs):
     if p.state != new_state:
         logging.debug("In redirectToState. current_state:{0}, new_state: {1}".format(str(p.state),str(new_state)))
-        #p.resetCategoryPath()
         p.setState(new_state)
     repeatState(p, **kwargs)
 
@@ -292,12 +292,15 @@ def repeatState(p, put=False, **kwargs):
 # ================================
 
 def broadcastPlayers(msg):
-    for chat_id in game.getPlayersId():
-        tell(chat_id, msg, sleepDelay=True)
+    for id in game.getPlayersId():
+        tell(id, msg, sleepDelay=True)
 
 def redirectPlayersToState(new_state):
-    for chat_id in game.getPlayersId():
-        redirectToState(chat_id, new_state)
+    for id in game.getPlayersId():
+        p = person.getPersonById(id)
+        if p==None:
+            logging.debug("p is none: {}".format(id))
+        redirectToState(p, new_state)
 
 def tellCheckers(msg):
     for chat_id in game.getCheckersId():
@@ -363,11 +366,12 @@ def goToState2(p, **kwargs):
     kb = utility.distributeElementMaxSize([str(r) for r in range(1, parameters.CARDS_PER_PLAYER + 1)])
     if giveInstruction:
         cards = game.givePlayersCards(isDealer)
+        p.setCards(cards, put=True)
         #true_false_dealer_str = "✅ TRUE" if game.getDealerHandTrueFalse() else "❌ FALSE"
         #true_false_checker_str = "✅ FALSE" if game.getDealerHandTrueFalse() else "❌ TRUE"
         msg = "✋ HAND {}\n" \
               "The bad press officer is {}\n" \
-              "*These are your cards, please choose one*:\n".format(game.getHandNumber(), game.getDealerName())
+              "These are your cards, please choose one:\n".format(game.getHandNumber(), game.getDealerName())
         tell(p.chat_id, msg)
         msg = "\n".join(['/{} {}'.format(n, c) for n, c in enumerate(cards, 1)])
         tell(p.chat_id, msg, kb)
@@ -377,11 +381,59 @@ def goToState2(p, **kwargs):
         else:
             numberStr = input
         if utility.representsIntBetween(numberStr, 1, parameters.CARDS_PER_PLAYER):
-            card = p.getCard[int(numberStr) - 1]
-            game.setPlayerCard(p.chat_id, card)
-            if game.is
+            card = p.getCard(int(numberStr) - 1)
+            game.storePlayerChosenCard(p.chat_id, card)
+            if game.haveAllPlayersPlayedTheirCards():
+                game.computePlayersCardsShuffle()
+                redirectPlayersToState(3)
+            else:
+                msg = "Waiting for all players to choose a card."
+                tell(p.chat_id, msg)
         else: #including input == ''
             tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+
+# ================================
+# GO TO STATE 3: Game: Guess Card
+# ================================
+def goToState3(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    giveInstruction = input is None
+    isDealer = p.chat_id == game.getDealerId()
+    if giveInstruction:
+        msg = "Great, all players have chosen a card!" \
+              "Now the critics should guess a card."
+        tell(p.chat_id, msg)
+        if not isDealer:
+            cards_shuffle = game.getPlayersCardsShuffle()
+            kb = utility.distributeElementMaxSize([str(r) for r in range(1, len(cards_shuffle) + 1)])
+            msg = "\n".join(['/{} {}'.format(n, c) for n, c in enumerate(cards_shuffle, 1)])
+            tell(p.chat_id, msg, kb)
+    else:
+        if isDealer:
+            tell(p.chat_id, "Not supposed to tell me anything here, please wait")
+            return
+        if input.startswith('/'):
+            numberStr = input[1:]
+        else:
+            numberStr = input
+        if utility.representsIntBetween(numberStr, 1, parameters.CARDS_PER_PLAYER):
+            card = p.getCard(int(numberStr) - 1)
+            game.storeCheckerGuessedCard(p.chat_id, card)
+            if game.haveAllCheckersGuessedTheirCards():
+                msg = "Great, all checkers have guessed a card!"
+                tell(p.chat_id, msg)
+                score = game.howManyPeopleChoseMyCard(p.chat_id)
+                msg = "Your card has been chosen by {} people.".format(score)
+                tell(p.chat_id, msg)
+                if isDealer:
+                    game.nextHand()
+                    redirectPlayersToState(1)
+            else:
+                msg = "Waiting for other critics to guess a card."
+                tell(p.chat_id, msg)
+        else: #including input == ''
+            tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+
 
 # ================================
 # HANDLERS

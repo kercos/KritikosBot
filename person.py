@@ -23,7 +23,7 @@ class Person(ndb.Model):
     state = ndb.IntegerProperty(default=-1, indexed=True)
     last_mod = ndb.DateTimeProperty(auto_now=True)
     enabled = ndb.BooleanProperty(default=True)
-    cards = ndb.StringProperty(repeated=True)
+    cards = ndb.PickleProperty()
     tmp_variables = ndb.PickleProperty()
 
     def getId(self):
@@ -82,15 +82,15 @@ class Person(ndb.Model):
             self.put()
 
     def getCard(self, index):
-        return self.cards[index].encode('utf-8')
+        return self.cards[index]
 
     def updateInfo(self, name, last_name, username, put=True):
         modified = False
-        if self.name != name:
-            name = name
+        if self.name.encode('utf-8') != name:
+            self.name = name
             modified = True
-        if self.last_name != last_name:
-            last_name = last_name
+        if self.last_name.encode('utf-8') != last_name:
+            self.last_name = last_name
             modified = True
         if (self.username!=username):
             self.username = username
@@ -124,12 +124,6 @@ class Person(ndb.Model):
             return self.tmp_variables[var_name]
         self.tmp_variables[var_name] = initValue
         return initValue
-
-    def setLastKeyboard(self, kb, put=True):
-        self.setTmpVariable(VAR_LAST_KEYBOARD, value = kb, put = put)
-
-    def getLastKeyboard(self):
-        return self.getTmpVariable(VAR_LAST_KEYBOARD)
 
     def initTmpVars(self):
         self.tmp_variables = {}

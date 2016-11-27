@@ -2,5 +2,5 @@
 
 from google.appengine.ext import ndb
 
-PLAYERS = 4
+PLAYERS = 3
 CARDS_PER_PLAYER = 5

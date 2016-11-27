@@ -19,7 +19,7 @@ def getHeadlines():
         spreadSheetReader = csv.reader(spreadSheetTsv, delimiter='\t', quoting=csv.QUOTE_NONE)
         lines = []
         for row in spreadSheetReader:
-            lines.append(row)
+            lines.append(row[0])
         result.append(lines)
     return result
 
