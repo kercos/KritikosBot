@@ -1,18 +1,6 @@
 #https://cloud.google.com/appengine/docs/python/config/cron?hl=en
 
 cron:
-- description: dayly check inserzioni expiration
-  url: /dayly_check_inserzioni_expiration
-  schedule: every day 12:00
-  timezone: Europe/Rome
-
-- description: dayly update dayly stats
-  url: /dayly_update_dayly_stats
-  schedule: every day 00:05
-  timezone: Europe/Rome
-
-- description: init new tempo etico
-  url: /yearly_create_new_tempo_etico
-  schedule: 1 of jan 12:00
-  timezone: Europe/Rome
-
+- description: checking if games have been idle too long
+  url: /checkExpiredGames
+  schedule: every 1 minutes

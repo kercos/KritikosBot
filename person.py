@@ -2,7 +2,9 @@
 
 from google.appengine.ext import ndb
 
+import game
 import utility
+
 
 #------------------------
 # TMP_VARIABLES NAMES
@@ -10,6 +12,8 @@ import utility
 VAR_PREVIOUS_INPUT = 'previous_input'
 VAR_LAST_KEYBOARD = 'last_keyboard'
 VAR_LAST_STATE = 'last_state'
+VAR_GAME_ROOM = 'game_room'
+VAR_CREATE_GAME = 'create_game' # {'stage': int, 'game_name': string, 'number_players': int, ...}
 
 #------------------------
 # Person class
@@ -23,7 +27,7 @@ class Person(ndb.Model):
     state = ndb.IntegerProperty(default=-1, indexed=True)
     last_mod = ndb.DateTimeProperty(auto_now=True)
     enabled = ndb.BooleanProperty(default=True)
-    cards = ndb.PickleProperty()
+    game_room = ndb.StringProperty()
     tmp_variables = ndb.PickleProperty()
 
     def getId(self):
@@ -60,6 +64,16 @@ class Person(ndb.Model):
             result += ' @' + self.getUsername(escapeMarkdown = escapeMarkdown)
         return result
 
+    def setGameRoom(self, name):
+        self.game_room = name
+
+    def getGameRoom(self, escapeMarkdown=True):
+        return self.getPropertyUtfMarkdown(self.username, escapeMarkdown=escapeMarkdown)
+
+    def getGame(self):
+        if self.game_room:
+            return game.getGame(self.game_room)
+
     def setLastKeyboard(self, kb, put=True):
         self.setTmpVariable(VAR_LAST_KEYBOARD, value = kb, put = put)
 
@@ -76,22 +90,25 @@ class Person(ndb.Model):
         if put:
             self.put()
 
-    def setCards(self, cards, put=False):
-        self.cards = cards
+    def setTmpVariable(self, var_name, value, put=False):
+        self.tmp_variables[var_name] = value
         if put:
             self.put()
 
-    def getCard(self, index):
-        return self.cards[index]
+    def getTmpVariable(self, var_name, initValue=None):
+        if var_name in self.tmp_variables:
+            return self.tmp_variables[var_name]
+        self.tmp_variables[var_name] = initValue
+        return initValue
 
     def updateInfo(self, name, last_name, username, put=True):
         modified = False
         if self.name.encode('utf-8') != name:
             self.name = name
             modified = True
-        if self.last_name.encode('utf-8') != last_name:
-            self.last_name = last_name
-            modified = True
+        #if self.last_name.encode('utf-8') != last_name:
+        #    self.last_name = last_name
+        #    modified = True
         if (self.username!=username):
             self.username = username
             modified = True
@@ -113,17 +130,6 @@ class Person(ndb.Model):
         self.tmp_variables.pop(var_name, None)
         if put:
             self.put()
-
-    def setTmpVariable(self, var_name, value, put=False):
-        self.tmp_variables[var_name] = value
-        if put:
-            self.put()
-
-    def getTmpVariable(self, var_name, initValue=None):
-        if var_name in self.tmp_variables:
-            return self.tmp_variables[var_name]
-        self.tmp_variables[var_name] = initValue
-        return initValue
 
     def initTmpVars(self):
         self.tmp_variables = {}

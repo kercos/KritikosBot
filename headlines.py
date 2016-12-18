@@ -25,3 +25,9 @@ def getHeadlines():
 
 HEADLINES = getHeadlines()
 LEGITIMATE_HEADLINES,  ILLEGITIMATE_HEADLINES = HEADLINES
+
+def getLegitimateHeadlines():
+    return LEGITIMATE_HEADLINES
+
+def getIllegitimateHeadlines():
+    return ILLEGITIMATE_HEADLINES

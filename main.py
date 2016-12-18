@@ -20,6 +20,7 @@ import webapp2
 
 import key
 import game
+from game import Game
 import buttons
 import icons
 import messages
@@ -29,6 +30,7 @@ import utility
 import jsonUtil
 import utility
 import parameters
+import render_results
 
 ########################
 WORK_IN_PROGRESS = False
@@ -36,8 +38,9 @@ WORK_IN_PROGRESS = False
 
 STATES = {
     1:   'Start State',
-    2:   'Game: choose own card',
-    3:   'Game: guess a card',
+    20:  'Game Lobby',
+    30:  'Game Room: choose own card',
+    31:  'Game Room: critics guess a card',
 }
 
 
@@ -81,13 +84,43 @@ def sendRequest(url, data, recipient_chat_id, debugInfo):
 # TELL FUNCTIONS
 # ================================
 
+def broadcast(sender, msg, restart_user=False, curs=None, enabledCount = 0):
+    #return
+
+    BROADCAST_COUNT_REPORT = utility.unindent(
+        """
+        Mesage sent to {} people
+        Enabled: {}
+        Disabled: {}
+        """
+    )
+
+    users, next_curs, more = Person.query().fetch_page(50, start_cursor=curs)
+    try:
+        for p in users:
+            if p.enabled:
+                enabledCount += 1
+                if restart_user:
+                    restart(p)
+                tell(p.chat_id, msg, sleepDelay=True)
+    except datastore_errors.Timeout:
+        sleep(1)
+        deferredSafeHandleException(broadcast, sender, msg, restart_user, curs, enabledCount)
+        return
+    if more:
+        deferredSafeHandleException(broadcast, sender, msg, restart_user, next_curs, enabledCount)
+    else:
+        total = Person.query().count()
+        disabled = total - enabledCount
+        msg_debug = BROADCAST_COUNT_REPORT.format(total, enabledCount, disabled)
+        tell(sender.chat_id, msg_debug)
 
 def tellMaster(msg, markdown=False, one_time_keyboard=False):
     for id in key.MASTER_CHAT_ID:
         tell(id, msg, markdown=markdown, one_time_keyboard = one_time_keyboard, sleepDelay=True)
 
-def tell(chat_id, msg, kb=None, markdown=False, inline_keyboard=False, one_time_keyboard=False,
-         sleepDelay=False, hide_keyboard=False, force_reply=False):
+def tell(chat_id, msg, kb=None, markdown=True, inline_keyboard=False, one_time_keyboard=False,
+         sleepDelay=False, remove_keyboard=False, force_reply=False):
 
     # reply_markup: InlineKeyboardMarkup or ReplyKeyboardMarkup or ReplyKeyboardHide or ForceReply
     if inline_keyboard:
@@ -100,9 +133,9 @@ def tell(chat_id, msg, kb=None, markdown=False, inline_keyboard=False, one_time_
             'resize_keyboard': True,
             'one_time_keyboard': one_time_keyboard,
         }
-    elif hide_keyboard:
+    elif remove_keyboard:
         replyMarkup = { #ReplyKeyboardHide
-            'hide_keyboard': hide_keyboard
+            'remove_keyboard': remove_keyboard
         }
     elif force_reply:
         replyMarkup = { #ForceReply
@@ -191,16 +224,53 @@ def sendVoice(chat_id, file_id):
 # SEND PHOTO
 # ================================
 
-def sendPhoto(chat_id, file_id):
+def sendPhoto(chat_id, file_id_or_url):
     try:
         data = {
             'chat_id': chat_id,
-            'photo': file_id,
+            'photo': file_id_or_url,
         }
         resp = requests.post(key.BASE_URL + 'sendPhoto', data)
         logging.info('Response: {}'.format(resp.text))
     except urllib2.HTTPError, err:
         report_exception()
+
+def sendPhotoData(chat_id, file_data, filename):
+    try:
+        files = [('photo', (filename, file_data, 'image/png'))]
+        data = {
+            'chat_id': chat_id,
+        }
+        resp = requests.post(key.BASE_URL + 'sendPhoto', data=data, files=files)
+        logging.info('Response: {}'.format(resp.text))
+    except urllib2.HTTPError, err:
+        report_exception()
+
+
+def sendScoreTest(chat_id):
+    result_table = [
+        ['', '👺🃏(x3)', '🕵🔭(x2)', '🕵🃏(x2)', 'TOTAL'],
+        ['👺 player1_xx', '4+1', '1', '2', '21'],
+        ['🕵 player2_xx', '2', '5+0', '3+1', '24'],
+        ['🕵 player3_xx', '1', '4+1', '3+0', '19']
+    ]
+    imgData = render_results.getResultImage(result_table)
+    sendPhotoData(chat_id, imgData, 'results.png')
+
+
+def sendTextImage(chat_id, text):
+    text = text.replace('+', '%2b')
+    text = text.replace(' ', '+')
+    text = text.replace('\n','%0B')
+    # see http://img4me.com/
+    # see https://developers.google.com/chart/image/docs/gallery/dynamic_icons
+    # see https://dummyimage.com/
+    # see https://placehold.it/
+    #img_url = "http://chart.apis.google.com/chart?chst=d_text_outline&chld=000000|20|l|FFFFFF|_|" + text
+    img_url = "https://placeholdit.imgix.net/~text?bg=ffffff&txtcolor=000000&txtsize=15&txt={}&w=400&h=200".format(text)
+    logging.debug("img_url: {}".format(img_url))
+    #img_url = "http://chart.apis.google.com/chart?chst=d_fnote&chld=sticky_y|2|0088FF|h|" + text
+    sendPhoto(chat_id, img_url)
 
 # ================================
 # SEND DOCUMENT
@@ -288,27 +358,92 @@ def repeatState(p, put=False, **kwargs):
         method(p, **kwargs)
 
 # ================================
-# PLAYERS FUNCTIONS
+# GAME FUNCTIONS
 # ================================
 
-def broadcastPlayers(msg):
-    for id in game.getPlayersId():
+def terminateGame(g, msg=''):
+    winners = g.getWinnerNames()
+    msg += '\n\n'
+    if winners:
+        winners_str = ', '.join(winners)
+        if len(winners) > 1:
+            msg += '{} The winners of the game are: {}'.format(icons.TROPHY, winners_str)
+        else:
+            msg += '{} The winner of the game is {}'.format(icons.TROPHY, winners_str)
+    for id in g.getPlayerIds():
+        p = person.getPersonById(id)
+        p.setGameRoom(None)
+        tell(p.chat_id, msg, remove_keyboard=True, sleepDelay=True)
+        restart(p)
+    if g.isPublic():
+        g.resetGame()
+    else:
+        game.deleteGame(g)
+
+def broadcastMsgToPlayers(g, msg):
+    for id in g.getPlayerIds():
         tell(id, msg, sleepDelay=True)
 
-def redirectPlayersToState(new_state):
-    for id in game.getPlayersId():
+def broadcastResultImageToPlayers(g, file_data):
+    for id in g.getPlayerIds():
+        sendPhotoData(id, file_data, 'results.png')
+        sleep(0.1)
+
+def redirectPlayersToState(g, new_state):
+    for id in g.getPlayerIds():
         p = person.getPersonById(id)
-        if p==None:
-            logging.debug("p is none: {}".format(id))
         redirectToState(p, new_state)
 
-def tellCheckers(msg):
-    for chat_id in game.getCheckersId():
+def sendPlayersWaitingAction(g, sleep_time=None):
+    for chat_id in g.getCriticsId():
+        sendWaitingAction(chat_id, sleep_time = sleep_time)
+
+def tellPlayers(g, msg):
+    for chat_id in g.getCriticsId():
         tell(chat_id, msg, sleepDelay=True)
 
-def tellDealer(msg):
-    tell(game.getDealerId(), msg, sleepDelay=True)
+def tellCritics(g, msg):
+    for chat_id in g.getPlayersId():
+        tell(chat_id, msg, sleepDelay=True)
 
+def tellBadPressOfficer(g, msg):
+    tell(g.getBadPressOfficerId(), msg, sleepDelay=True)
+
+def updateAndSendScoresToPlayers(g):
+    handScores = g.computeHandScores()
+    bpo_id = g.getBadPressOfficerId()
+    for p_id, scores in handScores.iteritems():
+        bpo_disguiser_reward, detective_reward, critic_disguiser_reward = handScores[p_id]
+        if p_id == bpo_id:
+            if bpo_disguiser_reward>0:
+                msg_bpo = '😀 You got {0} {1} (bad press officer disguiser rewards): ' \
+                      '{0} critics did not discover that your card was fake!'.format(
+                    bpo_disguiser_reward, icons.BPO_DISGUISER_REWARD)
+            else:
+                msg_bpo = '😕 You got 0 {} (bad press officer disguiser rewards): ' \
+                      'all critics discovered that your card was fake.'.format(icons.BPO_DISGUISER_REWARD)
+            tell(bpo_id, msg_bpo, sleepDelay=True, remove_keyboard=True)
+        else:
+            if detective_reward>0:
+                msg = '😀 You got the {} (detective reward): ' \
+                      "you were able to recognize the bad press officer's fake card".format(icons.DETECTIVE_REWARD)
+            else:
+                msg = '😕 You did not get the {} (detective reward): ' \
+                      "you were not able to recognize the bad press officer's fake card".format(icons.DETECTIVE_REWARD)
+            msg += '\n'
+            if critic_disguiser_reward>0:
+                msg += '😀 You got {0} {1} (critic disguiser rewards): ' \
+                      '{0} critic(s) thought that your card was fake.'.format(
+                    critic_disguiser_reward, icons.CRITIC_DISGUISER_REWARD)
+            else:
+                msg += '😕 You got 0 {} (critic disguiser rewards): ' \
+                      'no critic thought that your card was fake.'.format(icons.CRITIC_DISGUISER_REWARD)
+            tell(p_id, msg, sleepDelay=True, remove_keyboard=True)
+
+
+    score_table = g.updateGameScores()
+    imgData = render_results.getResultImage(score_table)
+    broadcastResultImageToPlayers(g, imgData)
 
 # ================================
 # GO TO STATE 1: Initial Screen
@@ -316,121 +451,244 @@ def tellDealer(msg):
 def goToState1(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     giveInstruction = input is None
+    kb = [[buttons.ENTER_GAME], [buttons.HELP]]
     if giveInstruction:
-        if game.areMorePlayersAccepted():
-            msg = 'Game instructions...'.format(p.getFirstName())
-            kb = [[buttons.ENTER_GAME],[buttons.HELP]]
-        else:
-            msg = 'Game instructions...'.format(p.getFirstName())
-            kb = [[buttons.REFRESH],[buttons.HELP]]
-        p.setLastKeyboard(kb)
+        msg = 'Press {} if you want to enter a game'.format(buttons.ENTER_GAME)
         tell(p.chat_id, msg, kb)
     else:
         if input in ['/help', buttons.HELP]:
             tell(p.chat_id, messages.INSTRUCTIONS)
         elif input == buttons.ENTER_GAME:
-            if game.addPlayer(p):
-                broadcastPlayers("Player {} joined the game!".format(p.getFirstName()))
-                if game.readyToStart():
-                    msg = "Starting the game..."
-                    broadcastPlayers(msg)
-                    redirectPlayersToState(2)
-                else:
-                    msg = "Waiting for {} other players...".format(game.remainingSeats())
-                    broadcastPlayers(msg)
-            else:
-                msg = "Sorry, there are no more place available, try later."
-                tell(p.chat_id, msg)
-                sendWaitingAction(p.chat_id, sleep_time=1)
-                repeatState(p)
-        elif input == buttons.REFRESH:
-            repeatState(p)
+            redirectToState(p, 20)
         elif p.chat_id in key.MASTER_CHAT_ID:
             if input.startswith('/sendText'):
                 sendText(p, input, markdown=True)
-            elif input == '/resetGame':
-                game.resetGame()
-                tell(p.chat_id, "Game resetted")
+            elif input == '/testScore':
+                sendScoreTest(p.chat_id)
             else:
-                tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+                tell(p.chat_id, messages.NOT_VALID_INPUT, kb=kb)
         else: # including input == ''
+            tell(p.chat_id, messages.NOT_VALID_INPUT, kb=kb)
+
+# ================================
+# GO TO STATE 20: Game Lobby
+# ================================
+def goToState20(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    giveInstruction = input is None
+    public_games = [game.getGame(x) for x in parameters.PUBLIC_GAME_ROOM_NAMES]
+    public_game_room_names_or_refresh = [
+        x.getGameRoomName() if x.areMorePlayersAccepted() else buttons.REFRESH for x in public_games
+    ]
+    kb = [public_game_room_names_or_refresh,[buttons.NEW_GAME_ROOM],[buttons.BACK]]
+    if giveInstruction:
+        msg = "YOU ARE IN THE *LOBBY*\n" \
+              "Please select one of the public rooms below, " \
+              "enter the name of a private room, " \
+              "or create a new one."
+        tell(p.chat_id, msg, kb)
+    else:
+        if input == buttons.REFRESH:
+            repeatState(p)
+        elif input == buttons.BACK:
+            restart(p)
+        elif input == buttons.NEW_GAME_ROOM:
+            p.setTmpVariable(person.VAR_CREATE_GAME, {'stage': 0})
+            redirectToState(p, 21)
+        elif input != '':
+            public = input in parameters.PUBLIC_GAME_ROOM_NAMES
+            if not public:
+                input = input.upper()
+            g = game.getGame(input)
+            if g:
+                if g.addPlayer(p):
+                    redirectToState(p, 22)
+                else:
+                    msg = "Sorry, there are no more places available in this game room, choose another room or try later."
+                    tell(p.chat_id, msg)
+                    sendWaitingAction(p.chat_id, sleep_time=1)
+                    repeatState(p)
+            else:
+                msg = "{} You didn't enter a valid game room name, " \
+                      "if you want to create a new one press {}.".format(icons.EXCLAMATION_ICON, buttons.NEW_GAME_ROOM)
+                tell(p.chat_id, msg)
+        else:  # input == ''
             tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
 
 # ================================
-# GO TO STATE 2: Game: Choose Own Card
+# GO TO STATE 21: Create new game
 # ================================
-def goToState2(p, **kwargs):
+def goToState21(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    if input == '':
+        tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
+        return
+    if input == buttons.BACK:
+        redirectToState(p, 20)  # lobby
+        return
+    giveInstructions = input is None
+    game_parameters = p.getTmpVariable(person.VAR_CREATE_GAME)
+    stage = game_parameters['stage']
+    if stage == 0: # game name
+        if giveInstructions:
+            kb = [[buttons.BACK]]
+            p.setLastKeyboard(kb)
+            msg = "Please enter the name of a new game."
+            tell(p.chat_id, msg, kb)
+        else:
+            input = input.upper()
+            if game.gameExists(input):
+                msg = "{} A game with this name already exists. Please try again.".format(icons.EXCLAMATION_ICON)
+                tell(p.chat_id, msg)
+            else:
+                game_parameters['stage'] = 1
+                game_parameters['game_name'] = input
+                repeatState(p, put=True)
+    elif stage == 1: # number of players
+        if giveInstructions:
+            kb = [['3','4','5','6'],[buttons.BACK]]
+            p.setLastKeyboard(kb)
+            msg = "Please enter the number of people."
+            tell(p.chat_id, msg, kb)
+        else:
+            if utility.representsIntBetween(input, 2, 30):
+                sendWaitingAction(p.chat_id)
+                number_players = int(input)
+                game_name = game_parameters['game_name']
+                g = game.createGame(game_name, number_players)
+                g.addPlayer(p)
+                redirectToState(p, 22)
+            else:
+                msg = "{} Please enter a number between 3 and 30.".format(icons.EXCLAMATION_ICON)
+                tell(p.chat_id, msg)
+
+# ================================
+# GO TO STATE 22: Game: Waiting for start
+# ================================
+def goToState22(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
     giveInstruction = input is None
-    isDealer = p.chat_id == game.getDealerId()
+    g = p.getGame()
+    if giveInstruction:
+        msg = "Entering the game *{}*".format(g.getGameRoomName())
+        tell(p.chat_id, msg, remove_keyboard=True)
+        broadcastMsgToPlayers(g, "Player {} joined the game!".format(p.getFirstName()))
+        if g.readyToStart():
+            msg = "Starting the game..."
+            broadcastMsgToPlayers(g, msg)
+            g.startGame()
+            redirectPlayersToState(g, 30)
+        else:
+            msg = "Waiting for {} other players...".format(g.remainingSeats())
+            broadcastMsgToPlayers(g, msg)
+    else:
+        msg = "{} Please wait for the other players to join the game.".format(icons.EXCLAMATION_ICON)
+        tell(p.chat_id, msg)
+
+
+# ================================
+# GO TO STATE 30: Game: Choose Own Card
+# ================================
+def goToState30(p, **kwargs):
+    input = kwargs['input'] if 'input' in kwargs.keys() else None
+    g = p.getGame()
+    if g == None:
+        return # game deleted because no more cards
+    giveInstruction = input is None
+    isBadPressOfficer = p.chat_id == g.getBadPressOfficerId()
     kb = utility.distributeElementMaxSize([str(r) for r in range(1, parameters.CARDS_PER_PLAYER + 1)])
     if giveInstruction:
-        cards = game.givePlayersCards(isDealer)
-        p.setCards(cards, put=True)
-        #true_false_dealer_str = "✅ TRUE" if game.getDealerHandTrueFalse() else "❌ FALSE"
-        #true_false_checker_str = "✅ FALSE" if game.getDealerHandTrueFalse() else "❌ TRUE"
-        msg = "✋ HAND {}\n" \
-              "The bad press officer is {}\n" \
-              "These are your cards, please choose one:\n".format(game.getHandNumber(), game.getDealerName())
-        tell(p.chat_id, msg)
-        msg = "\n".join(['/{} {}'.format(n, c) for n, c in enumerate(cards, 1)])
-        tell(p.chat_id, msg, kb)
+        cards = g.givePlayersCards(p.chat_id)
+        if cards:
+            msg = "✋ HAND {}\n".format(g.getHandNumber())
+            if isBadPressOfficer:
+                msg += "YOU ARE THE {} *BAD PRESS OFFICER*!!\n" \
+                       "These are your *FAKE NEWS*, " \
+                       "please choose the one that looks *MOST REALISTIC* to you:\n".format(icons.BAD_PRESS_OFFICER)
+            else:
+                msg += "YOU ARE A {} *CRITIC*!\n" \
+                       "The *bad press officer* is {}\n" \
+                       "These are your *RELIABLE NEWS*, " \
+                       "please choose the one it looks *MOST FAKE* to you:\n".format(icons.CRITIC, g.getBadPressOfficerName())
+            tell(p.chat_id, msg)
+            msg = "\n".join(['/{} {}'.format(n, utility.escapeMarkdown(c)) for n, c in enumerate(cards, 1)])
+            tell(p.chat_id, msg, kb)
+        else:
+            #g.sendFinalScores()
+            msg = "The game is terminated because there are no more cards to play."
+            terminateGame(g, msg)
     else:
         if input.startswith('/'):
             numberStr = input[1:]
         else:
             numberStr = input
         if utility.representsIntBetween(numberStr, 1, parameters.CARDS_PER_PLAYER):
-            card = p.getCard(int(numberStr) - 1)
-            game.storePlayerChosenCard(p.chat_id, card)
-            if game.haveAllPlayersPlayedTheirCards():
-                game.computePlayersCardsShuffle()
-                redirectPlayersToState(3)
+            index = int(numberStr) - 1
+            g.storePlayerChosenCard(p.chat_id, index)
+            if g.haveAllPlayersChosenACard():
+                g.computePlayersCardsShuffle()
+                redirectPlayersToState(g, 31)
             else:
-                msg = "Waiting for all players to choose a card."
-                tell(p.chat_id, msg)
+                msg = "👍 Thanks for your selection!\n" \
+                      "Let's wait for all players to choose a card."
+                tell(p.chat_id, msg, remove_keyboard=True)
         else: #including input == ''
             tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
 
 # ================================
-# GO TO STATE 3: Game: Guess Card
+# GO TO STATE 31: Game: Critics Guess Card
 # ================================
-def goToState3(p, **kwargs):
+def goToState31(p, **kwargs):
     input = kwargs['input'] if 'input' in kwargs.keys() else None
+    g = p.getGame()
+    if g == None:
+        return # game deleted because no more cards
     giveInstruction = input is None
-    isDealer = p.chat_id == game.getDealerId()
+    isBadPressOfficer = p.chat_id == g.getBadPressOfficerId()
     if giveInstruction:
-        msg = "Great, all players have chosen a card!" \
-              "Now the critics should guess a card."
-        tell(p.chat_id, msg)
-        if not isDealer:
-            cards_shuffle = game.getPlayersCardsShuffle()
+        msg = "👍 Great, all players have chosen a card!\n" \
+              "Now the critics should guess a card.\n"
+        if isBadPressOfficer:
+            msg += "⌛ Please wait..."
+        else:
+            msg = "Try to detect the *FAKE NEWS* from the followings:"
+        tell(p.chat_id, msg, remove_keyboard=True)
+        if not isBadPressOfficer:
+            cards_shuffle = g.getCriticCardsShuffle(p.chat_id)
             kb = utility.distributeElementMaxSize([str(r) for r in range(1, len(cards_shuffle) + 1)])
-            msg = "\n".join(['/{} {}'.format(n, c) for n, c in enumerate(cards_shuffle, 1)])
+            msg = "\n".join(['/{} {}'.format(n, utility.escapeMarkdown(c)) for n, c in enumerate(cards_shuffle, 1)])
             tell(p.chat_id, msg, kb)
+            p.setLastKeyboard(kb)
     else:
-        if isDealer:
-            tell(p.chat_id, "Not supposed to tell me anything here, please wait")
+        if isBadPressOfficer:
+            msg = "{} Please wait for the critics to guess a card.".format(icons.EXCLAMATION_ICON)
+            tell(p.chat_id, msg)
             return
         if input.startswith('/'):
             numberStr = input[1:]
         else:
             numberStr = input
         if utility.representsIntBetween(numberStr, 1, parameters.CARDS_PER_PLAYER):
-            card = p.getCard(int(numberStr) - 1)
-            game.storeCheckerGuessedCard(p.chat_id, card)
-            if game.haveAllCheckersGuessedTheirCards():
-                msg = "Great, all checkers have guessed a card!"
-                tell(p.chat_id, msg)
-                score = game.howManyPeopleChoseMyCard(p.chat_id)
-                msg = "Your card has been chosen by {} people.".format(score)
-                tell(p.chat_id, msg)
-                if isDealer:
-                    game.nextHand()
-                    redirectPlayersToState(1)
+            cardsShufflePlayer = g.getCriticCardsShuffle(p.chat_id)
+            card = cardsShufflePlayer[int(numberStr) - 1]
+            if g.storeCriticGuessedCard(p.chat_id, card):
+                if g.haveAllCriticsGuessedACard():
+                    msg = "👍 Great, all critics have guessed a card!"
+                    tellPlayers(g, msg)
+                    sendPlayersWaitingAction(g)
+                    updateAndSendScoresToPlayers(g)
+                    if g.isThereASingleWinner():
+                        terminateGame(g, "The game has terminated because there is a winner!")
+                    else:
+                        g.nextHand()
+                        sendPlayersWaitingAction(g, sleep_time=2)
+                        redirectPlayersToState(g, 30)
+                else:
+                    msg = "⌛ Waiting for the other critics to guess a card."
+                    tell(p.chat_id, msg, remove_keyboard=True)
             else:
-                msg = "Waiting for other critics to guess a card."
-                tell(p.chat_id, msg)
+                msg = "{} You cannot choose your own card, please try again.".format(icons.EXCLAMATION_ICON)
+                tell(p.chat_id, msg, kb=p.getLastKeyboard())
         else: #including input == ''
             tell(p.chat_id, messages.NOT_VALID_INPUT, kb=p.getLastKeyboard())
 
@@ -451,14 +709,41 @@ class MeHandler(webapp2.RequestHandler):
 class SetWebhookHandler(webapp2.RequestHandler):
     def get(self):
         urlfetch.set_default_fetch_deadline(60)
-        url = self.request.get('url')
-        if url:
-            self.response.write(
-                json.dumps(json.load(urllib2.urlopen(key.BASE_URL + 'setWebhook', urllib.urlencode({'url': url})))))
+        allowed_updates = ["message", "inline_query", "chosen_inline_result", "callback_query"]
+        data = {
+            'url': key.WEBHOOK_URL,
+            'allowed_updates': json.dumps(allowed_updates),
+        }
+        resp = requests.post(key.BASE_URL + 'setWebhook', data)
+        logging.info('SetWebhook Response: {}'.format(resp.text))
+        self.response.write(resp.text)
+
+class GetWebhookInfo(webapp2.RequestHandler):
+    def get(self):
+        urlfetch.set_default_fetch_deadline(60)
+        resp = requests.post(key.BASE_URL + 'getWebhookInfo')
+        logging.info('GetWebhookInfo Response: {}'.format(resp.text))
+        self.response.write(resp.text)
+
+class DeleteWebhook(webapp2.RequestHandler):
+    def get(self):
+        urlfetch.set_default_fetch_deadline(60)
+        resp = requests.post(key.BASE_URL + 'deleteWebhook')
+        logging.info('DeleteWebhook Response: {}'.format(resp.text))
+        self.response.write(resp.text)
+
 
 # ================================
 # ================================
 # ================================
+
+class CheckExpiredGames(SafeRequestHandler):
+    def get(self):
+        for g in Game.query():
+            if g.isGameExpired():
+                msg = "{} The game has terminated because it has been idle for too long".format(icons.TIME_ICON)
+                terminateGame(g, msg)
+
 
 class WebhookHandler(SafeRequestHandler):
     def post(self):
@@ -510,15 +795,24 @@ class WebhookHandler(SafeRequestHandler):
                     tell(p.chat_id, "You are in state " + str(p.state) + ": " + STATES[p.state])
                 else:
                     tell(p.chat_id, "You are in state " + str(p.state))
-            elif text.startswith('/getTmpVar '):
-                varName = text[11:]
-                result = p.tmp_variables[varName] if varName in p.tmp_variables else None
-                tell(p.chat_id, '{}:{}'.format(varName, result), markdown=False)
             elif text.startswith("/start"):
-                tell(p.chat_id, "Hi {}, welcomeback in KriticosBot!\n\n".format(p.getFirstName()))
-                p.setEnabled(True, put=False)
-                restart(p)
-            elif WORK_IN_PROGRESS and p.chat_id != key.FEDE_CHAT_ID:
+                if p.getGame()!=None:
+                    msg = "{} You are still in a game!".format(icons.EXCLAMATION_ICON)
+                    tell(p.chat_id, msg)
+                else:
+                    msg = "Hi {}, welcome back to KriticosBot!\n\n".format(p.getFirstName())
+                    tell(p.chat_id, msg)
+                    p.setEnabled(True, put=False)
+                    restart(p)
+            elif text.startswith("/exit"):
+                g = p.getGame()
+                if g==None:
+                    msg = "{} You are not in a game!".format(icons.EXCLAMATION_ICON)
+                    tell(p.chat_id, msg)
+                else:
+                    terminateGame(g, "The game has terminated because {} exited.".format(p.getFirstName()))
+            elif WORK_IN_PROGRESS and p.chat_id not in key.TEST_PLAYERS:
+                logging.debug('person {} not in {}'.format(p.chat_id, key.TEST_PLAYERS))
                 tell(p.chat_id, icons.UNDER_CONSTRUCTION + " System under maintanence, try later.")
             else:
                 logging.debug("Sending {} to state {} with input {}".format(p.getFirstName(), p.state, text))
@@ -540,7 +834,10 @@ def report_exception():
 app = webapp2.WSGIApplication([
     ('/me', MeHandler),
     ('/set_webhook', SetWebhookHandler),
-    ('/webhook', WebhookHandler),
+    ('/delete_webhook', DeleteWebhook),
+    ('/get_webhook_info', GetWebhookInfo),
+    (key.WEBHOOK_PATH, WebhookHandler),
+    ('/checkExpiredGames', CheckExpiredGames),
     ('/gamestatus', game.getGameStatus),
     ('/gamestatusjson', game.getGameStatusJson),
 ], debug=True)

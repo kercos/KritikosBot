@@ -1,5 +1,5 @@
 application: kritikosbot-telegram
-version: 1
+version: 4
 runtime: python27
 api_version: 1
 threadsafe: false
@@ -13,6 +13,14 @@ handlers:
   login: admin
   script: main.app
 
+- url: /get_webhook_info
+  login: admin
+  script: main.app
+
+- url: /delete_webhook
+  login: admin
+  script: main.app
+
 - url: /_ah/queue/deferred
   script: google.appengine.ext.deferred.deferred.application
   login: admin
@@ -23,6 +31,11 @@ handlers:
 - url: /html
   static_dir: html
   application_readable: true
+
+- url: /fonts
+  static_dir: fonts
+  application_readable: true
+
 
 libraries:
 - name: webapp2
