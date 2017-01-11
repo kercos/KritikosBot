@@ -18,7 +18,7 @@ LEGITIMATE_FEEDS = {
 
 ILLEGITIMATE_FEEDS = {
     #https://en.wikipedia.org/wiki/List_of_fake_news_websites
-    'Natural News': 'http://www.naturalnews.com/rss.xml',
+    #'Natural News': 'http://www.naturalnews.com/rss.xml',
     #'Snopes': 'http://www.snopes.com/info/whatsnew.xml',
     'The Spoof Front Page': 'http://www.thespoof.com/rss/feeds/frontpage/rss.xml',
     #'The Spoof US': 'http://www.thespoof.com/rss/feeds/us/rss.xml',

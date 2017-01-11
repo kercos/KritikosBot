@@ -152,7 +152,6 @@ class Game(ndb.Model):
         if len(self.players_ids) < self.number_seats:
             self.players_ids.append(player.chat_id)
             self.game_variables[PLAYER_NAMES].append(player.getFirstName())
-            self.put()
             player.setGameRoom(self.getGameRoomName())
             if put:
                 self.put()
