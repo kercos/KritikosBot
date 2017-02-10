@@ -290,11 +290,14 @@ class Game(ndb.Model):
         return sum([score>=parameters.WINNING_SCORE for score in self.getGameScores().values()])==1
 
     def getWinnerNames(self):
-        max_score = max(score for score in self.getGameScores().values())
-        if max_score == 0:
-            return []
-        winners_id = [id for id, score in self.getGameScores().iteritems() if score==max_score]
-        return [self.getPlayerName(x) for x in winners_id]
+        scores = self.getGameScores()
+        if scores:
+            max_score = max(scores.values())
+            if max_score == 0:
+                return []
+            winners_id = [id for id, score in self.getGameScores().iteritems() if score==max_score]
+            return [self.getPlayerName(x) for x in winners_id]
+        return None
 
 
 def gameExists(name):
