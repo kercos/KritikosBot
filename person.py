@@ -20,7 +20,8 @@ VAR_CREATE_GAME = 'create_game' # {'stage': int, 'game_name': string, 'number_pl
 #------------------------
 
 class Person(ndb.Model):
-    chat_id = ndb.IntegerProperty()
+    chat_id = ndb.StringProperty()
+    facebook = ndb.BooleanProperty()
     name = ndb.StringProperty()
     last_name = ndb.StringProperty()
     username = ndb.StringProperty()
@@ -57,12 +58,14 @@ class Person(ndb.Model):
                ' ' + self.getLastName(escapeMarkdown=escapeMarkdown)
 
     def getFirstNameLastNameUserName(self, escapeMarkdown=True):
-        result = self.getFirstName(escapeMarkdown =escapeMarkdown)
+        result = ''
+        if self.name:
+            result += self.getFirstName(escapeMarkdown =escapeMarkdown)
         if self.last_name:
             result += ' ' + self.getLastName(escapeMarkdown = escapeMarkdown)
         if self.username:
             result += ' @' + self.getUsername(escapeMarkdown = escapeMarkdown)
-        return result
+        return result.strip()
 
     def setGameRoom(self, name):
         self.game_room = name
@@ -91,6 +94,8 @@ class Person(ndb.Model):
             self.put()
 
     def setTmpVariable(self, var_name, value, put=False):
+        if self.tmp_variables is None:
+            self.tmp_variables = {}
         self.tmp_variables[var_name] = value
         if put:
             self.put()
@@ -135,28 +140,53 @@ class Person(ndb.Model):
         self.tmp_variables = {}
 
 
-def getPersonById(chat_id):
-    return Person.get_by_id(str(chat_id))
+def getId(chat_id, facebook):
+    return 'F_{}'.format(chat_id) if facebook else 'T_{}'.format(chat_id)
 
-def addPerson(chat_id, name, last_name, username):
+def getPersonByIdAndApp(chat_id, facebook):
+    id_str = getId(chat_id, facebook)
+    return Person.get_by_id(id_str)
+
+def getPersonByIdMulti(ids):
+    return ndb.get_multi([ndb.Key(Person, k) for k in ids])
+
+def addPerson(chat_id, name, last_name, username, facebook):
     p = Person(
-        id=str(chat_id),
+        id=getId(chat_id, facebook),
         chat_id=chat_id,
         name=name,
         last_name = last_name,
-        username = username
+        username = username,
+        facebook = facebook
     )
     p.initTmpVars()
     p.put()
     return p
 
 
+from google.appengine.api import datastore
+from google.appengine.api import datastore_errors
+
+def get_entities(keys):
+    rpc = datastore.GetRpcFromKwargs({})
+    keys, multiple = datastore.NormalizeAndTypeCheckKeys(keys)
+    entities = None
+    try:
+        entities = datastore.Get(keys, rpc=rpc)
+    except datastore_errors.EntityNotFoundError:
+        assert not multiple
+
+    return entities
+
+def put_entities(entities):
+    rpc = datastore.GetRpcFromKwargs({})
+    keys = datastore.Put(entities, rpc=rpc)
+    return keys
+
 def updateAll():
     all_people = Person.query().fetch()
-    prop_to_delete = ['tmp']
+    #results = get_entities([i.key for i in all_people])
     for p in all_people:
-        for prop in prop_to_delete:
-            if prop in p._properties:
-                del p._properties[prop]
+        p.chat_id = '{}'.format(p.key.id()[2:])
     create_futures = ndb.put_multi_async(all_people)
     ndb.Future.wait_all(create_futures)

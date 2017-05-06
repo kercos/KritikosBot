@@ -33,11 +33,11 @@ def getResultImage(result_table, show=False):
         img.show()
     return imgData.getvalue()
 
-def test():
+def test(show=True):
     result_table = [
         ['', '👺🃏(x3)', '🕵🔭(x2)', '🕵🃏(x2)', 'TOTAL'],
         ['👺 player1_xx', '4+1', '1', '2', '21'],
         ['🕵 player2_xx', '2', '5+0', '3+1', '24'],
         ['🕵 player3_xx', '1', '4+1', '3+0', '19']
     ]
-    getResultImage(result_table, show=True)
+    return getResultImage(result_table, show)

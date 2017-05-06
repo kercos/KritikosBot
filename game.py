@@ -39,7 +39,7 @@ HAND_SCORES = 'hands_scores' # --> { player_id1: [BPO_DISGUISER_POINT, CRITIC_DI
 #------------------------
 
 class Game(ndb.Model):
-    players_ids = ndb.IntegerProperty(repeated=True)
+    players_ids = ndb.StringProperty(repeated=True)
     number_seats = ndb.IntegerProperty()
     public = ndb.BooleanProperty()
     started = ndb.BooleanProperty()
@@ -150,7 +150,7 @@ class Game(ndb.Model):
     @ndb.transactional(retries=100, xg=True)
     def addPlayer(self, player, put=True):
         if len(self.players_ids) < self.number_seats:
-            self.players_ids.append(player.chat_id)
+            self.players_ids.append(player.getId())
             self.game_variables[PLAYER_NAMES].append(player.getFirstName())
             player.setGameRoom(self.getGameRoomName())
             if put:
